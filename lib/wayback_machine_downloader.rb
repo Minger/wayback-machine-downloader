@@ -216,8 +216,6 @@ class WaybackMachineDownloader
       threads << Thread.new do
         until file_queue.empty?
           file_remote_info = file_queue.pop(true) rescue nil
-          # delay start of download operation for configurable amount of time
-          sleep(@delay)
           download_file(file_remote_info) if file_remote_info
         end
       end
@@ -273,6 +271,8 @@ class WaybackMachineDownloader
       file_path = file_path.gsub(/[:*?&=<>\\|]/) {|s| '%' + s.ord.to_s(16) }
     end
     unless File.exist? file_path
+      # delay start of download operation for configurable amount of time
+      sleep(@delay)
       begin
         structure_dir_path dir_path
         open(file_path, "wb") do |file|
