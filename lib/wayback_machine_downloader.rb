@@ -6,6 +6,8 @@ require 'open-uri'
 require 'fileutils'
 require 'cgi'
 require 'json'
+require 'zlib'
+require 'stringio'
 require_relative 'wayback_machine_downloader/tidy_bytes'
 require_relative 'wayback_machine_downloader/to_regex'
 require_relative 'wayback_machine_downloader/archive_api'
@@ -14,11 +16,11 @@ class WaybackMachineDownloader
 
   include ArchiveAPI
 
-  VERSION = "2.3.1"
+  VERSION = "2.4.0"
 
   attr_accessor :base_url, :exact_url, :directory, :all_timestamps,
     :from_timestamp, :to_timestamp, :only_filter, :exclude_filter, 
-    :all, :maximum_pages, :threads_count
+    :all, :maximum_pages, :threads_count, :delay
 
   def initialize params
     @base_url = params[:base_url]
@@ -30,8 +32,11 @@ class WaybackMachineDownloader
     @only_filter = params[:only_filter]
     @exclude_filter = params[:exclude_filter]
     @all = params[:all]
+    # maximum page default is 100
     @maximum_pages = params[:maximum_pages] ? params[:maximum_pages].to_i : 100
     @threads_count = params[:threads_count].to_i
+    # default delay is 4 seconds
+    @delay = params[:delay] ? params[:delay].to_i : 4
   end
 
   def backup_name
@@ -89,6 +94,8 @@ class WaybackMachineDownloader
     print "."
     unless @exact_url
       @maximum_pages.times do |page_index|
+        # wait before fetching individual snapshots
+        sleep(@delay)
         snapshot_list = get_raw_list_from_api(@base_url + '/*', page_index)
         break if snapshot_list.empty?
         snapshot_list_to_consider += snapshot_list
@@ -134,8 +141,8 @@ class WaybackMachineDownloader
       file_id_and_timestamp = [file_timestamp, file_id].join('/')
       file_id_and_timestamp = CGI::unescape file_id_and_timestamp 
       file_id_and_timestamp = file_id_and_timestamp.tidy_bytes unless file_id_and_timestamp == ""
-      if file_id.nil?
-        puts "Malformed file url, ignoring: #{file_url}"
+      if file_id.nil? || file_id_and_timestamp.nil?
+        puts "Malformed file url or file_id_and_timestamp, ignoring: #{file_url}"
       else
         if match_exclude_filter(file_url)
           puts "File url matches exclude filter, ignoring: #{file_url}"
@@ -264,12 +271,21 @@ class WaybackMachineDownloader
       file_path = file_path.gsub(/[:*?&=<>\\|]/) {|s| '%' + s.ord.to_s(16) }
     end
     unless File.exist? file_path
+      # delay start of download operation for configurable amount of time
+      sleep(@delay)
       begin
         structure_dir_path dir_path
         open(file_path, "wb") do |file|
           begin
             URI("https://web.archive.org/web/#{file_timestamp}id_/#{file_url}").open("Accept-Encoding" => "plain") do |uri|
-              file.write(uri.read)
+              content = uri.read
+              
+              if uri.content_encoding.include? 'gzip'
+                gz = Zlib::GzipReader.new(StringIO.new(content))
+                content = gz.read
+              end
+              
+              file.write(content)
             end
           rescue OpenURI::HTTPError => e
             puts "#{file_url} # #{e}"
